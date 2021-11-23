@@ -1,7 +1,7 @@
 // Dirichlet boundary should be labelled 1
 verbosity = 0;
 
-load "Element_HCT"
+//load "Element_HCT"
 load "Morley"
 load "iovtk"
 
