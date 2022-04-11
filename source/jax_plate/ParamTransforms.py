@@ -3,6 +3,7 @@ import jax.numpy as jnp
 
 MODULI_INDICES = ["11", "12", "16", "22", "26", "66"]
 
+
 def isotropic_to_full(isotropic_params, *args):
 
     D = isotropic_params[0]

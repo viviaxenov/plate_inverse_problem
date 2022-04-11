@@ -10,6 +10,7 @@ from jax.config import config
 config.update("jax_enable_x64", True)
 
 from .pyFFInterface import *
+from .Laminate import *
 
 
 class Problem:
@@ -29,14 +30,26 @@ class Problem:
     def __init__(
         self,
         path_to_edp: str,
-        thickness: np.float64,
-        density: np.float64,
+        thickness: np.float64 = None,
+        density: np.float64 = None,
+        laminate_model: MaterialModel = None,
         accelerometer_param: dict = None,
     ):
+
+        if laminate_model is None:
+            assert thickness is not None and density is not None
+
         """Constructor method"""
-        self.h = thickness
-        self.e = thickness / 2.0
-        self.rho = density
+        self.laminate_model = laminate_model
+        if laminate_model is None:
+            self.h = thickness
+            self.e = thickness / 2.0
+            self.rho = density
+
+        else:
+            self.e = laminate_model.get_half_thickness()
+            self.h = self.e*2.
+
 
         processed_ff_output = processFFOutput(getOutput(path_to_edp))
 
@@ -60,10 +73,16 @@ class Problem:
         # but it is too comlicated as for now
         self.fLoad = jnp.array(processed_ff_output["fLoad"])
 
-        # Total (regular + rotational) inertia
-        self.MInertia = self.rho * (self.M + 1.0 / 3.0 * self.e ** 2 * self.L)
-        # BC term
-        self.fInertia = self.rho * (self.fM + 1.0 / 3.0 * self.e ** 2 * self.fL)
+        if self.laminate_model is None:
+            # Total (regular + rotational) inertia
+            self.MInertia = self.rho * (self.M + 1.0 / 3.0 * self.e ** 2 * self.L)
+            # BC term
+            self.fInertia = self.rho * (self.fM + 1.0 / 3.0 * self.e ** 2 * self.fL)
+        else:
+            I0, I2 = self.laminate_model.get_inertia_terms()
+            self.MInertia = (I0*self.M + I2 * self.L)/self.h
+            self.fInertia = (I0*self.fM + I2 * self.fL)/self.h
+            
 
         if accelerometer_param is not None:
             # TODO: check e vs 2e=h
@@ -82,14 +101,14 @@ class Problem:
         self.interpolation_vector = jnp.array(
             processed_ff_output["interpolation_vector"]
         )
-        self.interpolation_value_from_bc = jnp.float32(
+        self.interpolation_value_from_bc = jnp.float64(
             processed_ff_output["interpolation_value_from_bc"]
         )
         # TODO decide if we need to calculate in f64 in jax
         self.test_point = processed_ff_output["test_point_coord"]
         self.constrained_idx = processed_ff_output["constrained_idx"]
 
-    def getAFCFunction(self, params_frequency_dependent, batch_size=None):
+    def getAFCFunction(self, params_frequency_dependent=None, batch_size=None):
         """Creates function to evaluate AFC 
             :param params_to_physical: Function that converts chosen model parameters to the physical parameters of the model,
                 D_ij storage modulus [Pa], beta_ij loss factor [1], ij in [11, 12, 16, 22, 26, 66], in total 12 parameters.
@@ -99,6 +118,12 @@ class Problem:
                 and returns the afc[nW, 2] array, where afc[0, :] is the real and afc[1, :] the imaginary part of complex amplitude in test point
             :rtype: callable
             """
+
+        if self.laminate_model is None:
+            assert params_frequency_dependent is not None
+        else:
+            params_frequency_dependent = self.laminate_model.get_parameter_transform()
+            
 
         def _solve(f, params):
             # solve for one frequency f (in [Hz])
